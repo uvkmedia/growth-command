@@ -10,8 +10,10 @@ import { ChevronDown, TrendingDown, TrendingUp, Target, Zap, AlertTriangle } fro
 const FEED = "https://uvk.app.n8n.cloud/webhook/dashboard-data";
 
 const TARGET = { cac: 1800 };
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const agoStr = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
+const _pad = (n) => String(n).padStart(2, "0");
+const _local = (dt) => `${dt.getFullYear()}-${_pad(dt.getMonth() + 1)}-${_pad(dt.getDate())}`;
+const todayStr = () => _local(new Date());
+const agoStr = (d) => _local(new Date(Date.now() - d * 864e5));
 
 /* ---- normalizers ------------------------------------------------- */
 const NICHE_CANON = [
