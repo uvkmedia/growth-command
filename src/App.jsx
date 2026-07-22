@@ -332,8 +332,8 @@ export default function GrowthCommand() {
               <input type="date" className="dr-input" value={to} min={from} max={todayStr()} onChange={(e) => setTo(e.target.value)} />
             </div>
             <div className="dr-presets">
-              {[["7d", 7], ["30d", 30], ["90d", 90]].map(([l, d]) => (
-                <button key={l} className="dr-chip" onClick={() => { setFrom(agoStr(d)); setTo(todayStr()); }}>{l}</button>
+              {[["Today", 0, 0], ["Yest", 1, 1], ["3d", 3, 0], ["7d", 7, 0], ["14d", 14, 0], ["30d", 30, 0], ["60d", 60, 0], ["90d", 90, 0]].map(([l, f, t]) => (
+                <button key={l} className="dr-chip" onClick={() => { setFrom(agoStr(f)); setTo(agoStr(t)); }}>{l}</button>
               ))}
               <button className="dr-chip" onClick={() => { setFrom(""); setTo(todayStr()); }}>All</button>
             </div>
