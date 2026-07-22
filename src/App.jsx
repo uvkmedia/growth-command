@@ -242,9 +242,10 @@ export default function GrowthCommand() {
       (closer === "All" || r["Closer/Owner"] === closer) &&
       inWin(r["Date"]));
 
-    // CASH — Funnel Source = niche, Owner = closer
+    // CASH & CLOSES — this sheet is the source of truth for paying deals.
+    // Niche column ties each close to a niche; each row = one close.
     const fCash = src.cash.filter((r) =>
-      nMatch(r["Funnel Source"]) &&
+      nMatch(r["Niche"]) &&
       (closer === "All" || r["Owner"] === closer) &&
       inWin(r["Date Created"]));
 
@@ -253,12 +254,13 @@ export default function GrowthCommand() {
     fMeta.forEach((r) => { spend += num(r.spend); impressions += num(r.impressions); });
 
     const newCalls = fApptsBooked.length;          // marketing: booked in window
-    let liveCalls = fApptsCall.length, shows = 0, noshows = 0, closes = 0;
+    let liveCalls = fApptsCall.length, shows = 0, noshows = 0;
     fApptsCall.forEach((r) => {
       const c = classify(r["Status (GHL Pipeline)"]);
-      if (c.show) shows++; if (c.noshow) noshows++; if (c.close) closes++;
+      if (c.show) shows++; if (c.noshow) noshows++;
     });
 
+    const closes = fCash.length;                   // closes = actual deals from cash sheet
     const leadsCount = fLeads.length;
     let cash = 0;
     fCash.forEach((r) => { cash += num(r["Amount"]); });
@@ -285,8 +287,8 @@ export default function GrowthCommand() {
     const B = (n) => (bmap[n] ??= { niche: n, spend: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0 });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
     fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
-    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; if (c.close) o.closes++; });
-    fCash.forEach((r) => { B(canonNiche(r["Funnel Source"])).cash += num(r["Amount"]); });
+    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; });
+    fCash.forEach((r) => { const o = B(canonNiche(r["Niche"])); o.closes++; o.cash += num(r["Amount"]); });
     const breakdown = Object.values(bmap).map((o) => ({
       ...o, spend: Math.round(o.spend),
       cac: o.closes ? o.spend / o.closes : Infinity,
@@ -304,14 +306,18 @@ export default function GrowthCommand() {
     const ads = Object.values(amap).map((o) => ({ ...o, spend: Math.round(o.spend), cps: o.sched ? o.spend / o.sched : Infinity }))
       .sort((a, b) => b.spend - a.spend);
 
-    // closer scoreboard
+    // closer scoreboard — shows from appointments, closes + cash from the cash sheet
     const cmap = {};
     fApptsCall.forEach((r) => {
       const k = r["Closer"] || "(none)";
       const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
-      const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; if (c.close) o.closes++;
+      if (classify(r["Status (GHL Pipeline)"]).show) o.shows++;
     });
-    fCash.forEach((r) => { const k = r["Owner"] || "(none)"; (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 }).cash += num(r["Amount"]); });
+    fCash.forEach((r) => {
+      const k = r["Owner"] || "(none)";
+      const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
+      o.closes++; o.cash += num(r["Amount"]);
+    });
     const closers = Object.values(cmap).map((o) => ({ ...o, closeRate: o.shows ? o.closes / o.shows : NaN }))
       .sort((a, b) => b.cash - a.cash);
 
