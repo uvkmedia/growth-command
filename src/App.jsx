@@ -46,6 +46,14 @@ function tms(v) {
   const d = new Date(v);
   return isNaN(d) ? null : d.getTime();
 }
+// local calendar day (YYYY-MM-DD) for any input, timezone-safe
+function dayKey(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  return isNaN(d) ? null : _local(d);
+}
 // classify a GHL pipeline status string into funnel stages
 function classify(status) {
   const s = String(status || "").toLowerCase();
@@ -176,8 +184,7 @@ export default function GrowthCommand() {
     };
   }, [raw]);
 
-  const fromMs = from ? new Date(from + "T00:00:00").getTime() : -Infinity;
-  const toMs = to ? new Date(to + "T23:59:59").getTime() : Infinity;
+  // window comparison happens by calendar day inside the model (see inWin)
 
   // filter options from real data
   const opts = useMemo(() => {
@@ -197,7 +204,7 @@ export default function GrowthCommand() {
     if (!src) return null;
 
     const nMatch = (v) => niche === "All" || canonNiche(v) === niche;
-    const inWin = (v) => { const t = tms(v); return t !== null && t >= fromMs && t <= toMs; };
+    const inWin = (v) => { const k = dayKey(v); return k !== null && (!from || k >= from) && (!to || k <= to); };
 
     // META (spend / impressions) — offer applies strictly, closer N/A
     const fMeta = src.meta.filter((r) =>
@@ -245,7 +252,7 @@ export default function GrowthCommand() {
 
     // trend (spend from meta, booked from appts) by date
     const tmap = {};
-    const key = (v) => { const t = tms(v); return t ? new Date(t).toISOString().slice(5, 10) : null; };
+    const key = (v) => { const k = dayKey(v); return k ? k.slice(5) : null; };
     fMeta.forEach((r) => { const k = key(r.date); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).spend += num(r.spend); });
     fAppts.forEach((r) => { const k = key(r["Date"]); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).booked += 1; });
     const trend = Object.values(tmap).sort((a, b) => a.date.localeCompare(b.date))
@@ -286,7 +293,7 @@ export default function GrowthCommand() {
       .sort((a, b) => b.cash - a.cash);
 
     return { agg, trend, breakdown, ads, closers };
-  }, [src, niche, offer, closer, fromMs, toMs]);
+  }, [src, niche, offer, closer, from, to]);
 
   /* ---- render states ---- */
   if (loading) return <Shell><div className="state">Loading your live data…</div></Shell>;
