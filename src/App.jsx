@@ -10,7 +10,8 @@ import { ChevronDown, TrendingDown, TrendingUp, Target, Zap, AlertTriangle } fro
 const FEED = "https://uvk.app.n8n.cloud/webhook/dashboard-data";
 
 const TARGET = { cac: 1800 };
-const RANGES = ["Last 7 days", "Last 30 days", "Last 90 days"];
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const agoStr = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
 
 /* ---- normalizers ------------------------------------------------- */
 const NICHE_CANON = [
@@ -150,7 +151,8 @@ export default function GrowthCommand() {
   const [niche, setNiche] = useState("All");
   const [offer, setOffer] = useState("All");
   const [closer, setCloser] = useState("All");
-  const [range, setRange] = useState("Last 30 days");
+  const [from, setFrom] = useState(agoStr(30));
+  const [to, setTo] = useState(todayStr());
 
   useEffect(() => {
     let alive = true;
@@ -172,8 +174,8 @@ export default function GrowthCommand() {
     };
   }, [raw]);
 
-  const days = range === "Last 7 days" ? 7 : range === "Last 30 days" ? 30 : 90;
-  const cutoff = Date.now() - days * 864e5;
+  const fromMs = from ? new Date(from + "T00:00:00").getTime() : -Infinity;
+  const toMs = to ? new Date(to + "T23:59:59").getTime() : Infinity;
 
   // filter options from real data
   const opts = useMemo(() => {
@@ -193,7 +195,7 @@ export default function GrowthCommand() {
     if (!src) return null;
 
     const nMatch = (v) => niche === "All" || canonNiche(v) === niche;
-    const inWin = (v) => { const t = tms(v); return t !== null && t >= cutoff; };
+    const inWin = (v) => { const t = tms(v); return t !== null && t >= fromMs && t <= toMs; };
 
     // META (spend / impressions) — offer applies strictly, closer N/A
     const fMeta = src.meta.filter((r) =>
@@ -282,7 +284,7 @@ export default function GrowthCommand() {
       .sort((a, b) => b.cash - a.cash);
 
     return { agg, trend, breakdown, ads, closers };
-  }, [src, niche, offer, closer, cutoff]);
+  }, [src, niche, offer, closer, fromMs, toMs]);
 
   /* ---- render states ---- */
   if (loading) return <Shell><div className="state">Loading your live data…</div></Shell>;
@@ -322,7 +324,20 @@ export default function GrowthCommand() {
           <Dropdown label="Niche" value={niche} options={opts.niches} onChange={setNiche} />
           <Dropdown label="Offer" value={offer} options={opts.offers} onChange={setOffer} />
           <Dropdown label="Closer" value={closer} options={opts.closers} onChange={setCloser} />
-          <Dropdown label="Range" value={range} options={RANGES} onChange={setRange} />
+          <div className="dd">
+            <span className="dd-label">Range</span>
+            <div className="dr-row">
+              <input type="date" className="dr-input" value={from} max={to || todayStr()} onChange={(e) => setFrom(e.target.value)} />
+              <span className="dr-sep">→</span>
+              <input type="date" className="dr-input" value={to} min={from} max={todayStr()} onChange={(e) => setTo(e.target.value)} />
+            </div>
+            <div className="dr-presets">
+              {[["7d", 7], ["30d", 30], ["90d", 90]].map(([l, d]) => (
+                <button key={l} className="dr-chip" onClick={() => { setFrom(agoStr(d)); setTo(todayStr()); }}>{l}</button>
+              ))}
+              <button className="dr-chip" onClick={() => { setFrom(""); setTo(todayStr()); }}>All</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -483,6 +498,13 @@ const CSS = `
 .dd-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--dim);padding:7px 9px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit;white-space:nowrap;}
 .dd-item:hover{background:#222d3e;color:var(--text);}
 .dd-item.active{color:var(--gold);background:var(--gold-soft);}
+.dr-row{display:flex;align-items:center;gap:6px;}
+.dr-input{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font-size:11.5px;font-family:'IBM Plex Mono',monospace;color-scheme:dark;}
+.dr-input:hover{border-color:#33415a;}
+.dr-sep{color:var(--faint);font-size:12px;}
+.dr-presets{display:flex;gap:5px;margin-top:5px;}
+.dr-chip{background:var(--panel);border:1px solid var(--line);color:var(--dim);border-radius:6px;padding:4px 9px;font-size:10.5px;cursor:pointer;font-family:inherit;}
+.dr-chip:hover{border-color:#33415a;color:var(--text);}
 .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px;}
 .kpi{background:var(--panel);border:1px solid var(--line-soft);border-radius:12px;padding:15px 16px;position:relative;overflow:hidden;}
 .kpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--line);}
