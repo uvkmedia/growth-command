@@ -138,6 +138,18 @@ function Kpi({ label, value, sub, tone, delta, money }) {
   );
 }
 
+function StatRow({ label, value, pct, tone, strong }) {
+  return (
+    <div className="sr">
+      <span className="sr-label">{label}</span>
+      <span className="sr-right">
+        {pct != null && !isNaN(pct) && <span className="sr-pct">{pctf(pct)}</span>}
+        <span className={"sr-val " + (tone || "") + (strong ? " strong" : "")}>{value}</span>
+      </span>
+    </div>
+  );
+}
+
 function EffBar({ value, target }) {
   const ratio = Math.min(1.6, value / target);
   const over = value > target;
@@ -212,8 +224,14 @@ export default function GrowthCommand() {
       (offer === "All" || r.offer === offer) &&
       inWin(r.date));
 
-    // APPOINTMENTS (funnel) — keyed off CALL date (Appointment Time/Date), not booked date
-    const fAppts = src.appts.filter((r) =>
+    // APPOINTMENTS — two lenses:
+    //   NEW calls scheduled  = booked date (col A "Date")  -> MARKETING outcome
+    //   LIVE calls on calendar = call date (col E)          -> SALES (shows/closes)
+    const fApptsBooked = src.appts.filter((r) =>
+      nMatch(r["Niche/Offer"]) &&
+      (closer === "All" || r["Closer"] === closer) &&
+      inWin(r["Date"]));
+    const fApptsCall = src.appts.filter((r) =>
       nMatch(r["Niche/Offer"]) &&
       (closer === "All" || r["Closer"] === closer) &&
       inWin(r["Appointment Time/Date"]));
@@ -234,8 +252,9 @@ export default function GrowthCommand() {
     let spend = 0, impressions = 0;
     fMeta.forEach((r) => { spend += num(r.spend); impressions += num(r.impressions); });
 
-    let booked = fAppts.length, shows = 0, noshows = 0, closes = 0;
-    fAppts.forEach((r) => {
+    const newCalls = fApptsBooked.length;          // marketing: booked in window
+    let liveCalls = fApptsCall.length, shows = 0, noshows = 0, closes = 0;
+    fApptsCall.forEach((r) => {
       const c = classify(r["Status (GHL Pipeline)"]);
       if (c.show) shows++; if (c.noshow) noshows++; if (c.close) closes++;
     });
@@ -244,30 +263,34 @@ export default function GrowthCommand() {
     let cash = 0;
     fCash.forEach((r) => { cash += num(r["Amount"]); });
 
-    const agg = { spend, impressions, booked, shows, noshows, closes, leadsCount, cash };
+    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash };
+    agg.costPerNewCall = newCalls ? spend / newCalls : Infinity;
+    agg.showRate = liveCalls ? shows / liveCalls : NaN;
+    agg.closeRate = shows ? closes / shows : NaN;
     agg.cac = closes ? spend / closes : Infinity;
     agg.cpShow = shows ? spend / shows : Infinity;
     agg.cashPerCall = shows ? cash / shows : 0;
     agg.roas = spend ? cash / spend : 0;
 
-    // trend (spend from meta, booked from appts) by date
+    // trend: spend (spend date) vs NEW calls scheduled (booked date)
     const tmap = {};
     const key = (v) => { const k = dayKey(v); return k ? k.slice(5) : null; };
-    fMeta.forEach((r) => { const k = key(r.date); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).spend += num(r.spend); });
-    fAppts.forEach((r) => { const k = key(r["Appointment Time/Date"]); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).booked += 1; });
+    fMeta.forEach((r) => { const k = key(r.date); if (!k) return; (tmap[k] ??= { date: k, spend: 0, newCalls: 0 }).spend += num(r.spend); });
+    fApptsBooked.forEach((r) => { const k = key(r["Date"]); if (!k) return; (tmap[k] ??= { date: k, spend: 0, newCalls: 0 }).newCalls += 1; });
     const trend = Object.values(tmap).sort((a, b) => a.date.localeCompare(b.date))
       .map((d) => ({ ...d, spend: Math.round(d.spend) }));
 
-    // breakdown by NICHE (shared dimension across all sources)
+    // breakdown by NICHE
     const bmap = {};
-    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, booked: 0, shows: 0, closes: 0, cash: 0 });
+    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0 });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
-    fAppts.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.booked++; const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; if (c.close) o.closes++; });
+    fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
+    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; if (c.close) o.closes++; });
     fCash.forEach((r) => { B(canonNiche(r["Funnel Source"])).cash += num(r["Amount"]); });
     const breakdown = Object.values(bmap).map((o) => ({
       ...o, spend: Math.round(o.spend),
       cac: o.closes ? o.spend / o.closes : Infinity,
-      showRate: o.booked ? o.shows / o.booked : NaN,
+      showRate: o.liveCalls ? o.shows / o.liveCalls : NaN,
       closeRate: o.shows ? o.closes / o.shows : NaN,
     })).sort((a, b) => b.spend - a.spend);
 
@@ -283,7 +306,7 @@ export default function GrowthCommand() {
 
     // closer scoreboard
     const cmap = {};
-    fAppts.forEach((r) => {
+    fApptsCall.forEach((r) => {
       const k = r["Closer"] || "(none)";
       const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
       const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; if (c.close) o.closes++;
@@ -311,13 +334,6 @@ export default function GrowthCommand() {
   );
 
   const a = model.agg;
-  const funnel = [
-    { label: "Leads", v: a.leadsCount, color: "var(--violet)" },
-    { label: "Booked", v: a.booked, color: "var(--gold)" },
-    { label: "Showed", v: a.shows, color: "var(--teal)" },
-    { label: "Closed", v: a.closes, color: "var(--teal-bright)" },
-  ];
-  const fMax = Math.max(...funnel.map((f) => f.v), 1);
 
   return (
     <Shell>
@@ -352,17 +368,17 @@ export default function GrowthCommand() {
 
       <section className="kpis">
         <Kpi label="AD SPEND" value={a.spend} money sub={`${model.trend.length} days`} />
-        <Kpi label="BOOKED" value={a.booked} sub={`${a.shows} showed · ${a.noshows} no-show`} />
+        <Kpi label="NEW CALLS" value={a.newCalls} sub={a.costPerNewCall === Infinity ? "—" : `${usd(a.costPerNewCall)} / call`} />
         <Kpi label="CAC" value={a.cac === Infinity ? "—" : Math.round(a.cac)} money tone={a.cac > TARGET.cac ? "warn" : "ok"} sub={`target ${usd(TARGET.cac)}`} />
-        <Kpi label="COST / SHOW" value={a.cpShow === Infinity ? "—" : Math.round(a.cpShow)} money sub={`${a.closes} closed`} />
+        <Kpi label="SHOWS" value={a.shows} tone="ok" sub={`${pctf(a.showRate)} show rate`} />
         <Kpi label="CASH / CALL" value={Math.round(a.cashPerCall)} money tone="gold" sub={`${a.roas.toFixed(1)}x ROAS · ${usd(a.cash)}`} />
       </section>
 
       <section className="mid">
         <div className="panel trend-panel">
           <div className="panel-head">
-            <h3>Spend vs Booked calls</h3>
-            <div className="legend"><span><i className="sw sw-gold" /> Spend</span><span><i className="sw sw-teal" /> Booked</span></div>
+            <h3>Spend vs New calls scheduled</h3>
+            <div className="legend"><span><i className="sw sw-gold" /> Spend</span><span><i className="sw sw-teal" /> New calls</span></div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={model.trend} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
@@ -376,23 +392,31 @@ export default function GrowthCommand() {
               <XAxis dataKey="date" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={{ stroke: "#263042" }} interval={Math.max(0, Math.ceil(model.trend.length / 8))} />
               <YAxis yAxisId="l" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} />
               <YAxis yAxisId="r" orientation="right" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} width={26} />
-              <Tooltip contentStyle={TT} labelStyle={{ color: "#EAEEF6", fontFamily: "IBM Plex Mono", fontSize: 11 }} formatter={(v, n) => [n === "spend" ? usd(v) : v, n === "spend" ? "Spend" : "Booked"]} />
+              <Tooltip contentStyle={TT} labelStyle={{ color: "#EAEEF6", fontFamily: "IBM Plex Mono", fontSize: 11 }} formatter={(v, n) => [n === "spend" ? usd(v) : v, n === "spend" ? "Spend" : "New calls"]} />
               <Area yAxisId="l" type="monotone" dataKey="spend" stroke="#F0B54A" strokeWidth={2} fill="url(#gSpend)" />
-              <Line yAxisId="r" type="monotone" dataKey="booked" stroke="#46C7B8" strokeWidth={2} dot={false} />
+              <Line yAxisId="r" type="monotone" dataKey="newCalls" stroke="#46C7B8" strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="panel funnel-panel">
-          <div className="panel-head"><h3>Funnel</h3></div>
-          <div className="funnel">
-            {funnel.map((f, i) => (
-              <div key={f.label} className="fn-row">
-                <div className="fn-top"><span className="fn-label">{f.label}</span><span className="fn-val">{f.v}</span></div>
-                <div className="fn-track"><div className="fn-fill" style={{ width: `${(f.v / fMax) * 100}%`, background: f.color }} /></div>
-                {i < funnel.length - 1 && funnel[i].v > 0 && <span className="fn-conv">{pctf(funnel[i + 1].v / funnel[i].v)} →</span>}
-              </div>
-            ))}
+        <div className="panel">
+          <div className="panel-head"><h3>Marketing → Sales</h3></div>
+          <div className="split">
+            <div className="split-sec">
+              <div className="split-head mkt">MARKETING</div>
+              <StatRow label="Ad spend" value={usd(a.spend)} />
+              <StatRow label="Leads" value={a.leadsCount} />
+              <StatRow label="New calls scheduled" value={a.newCalls} strong />
+              <StatRow label="Cost / new call" value={a.costPerNewCall === Infinity ? "—" : usd(a.costPerNewCall)} />
+            </div>
+            <div className="split-sec">
+              <div className="split-head sal">SALES · calls on calendar</div>
+              <StatRow label="Live calls on calendar" value={a.liveCalls} strong />
+              <StatRow label="Shows" value={a.shows} pct={a.showRate} tone="teal" />
+              <StatRow label="No-shows" value={a.noshows} />
+              <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong />
+              <StatRow label="Cash collected" value={usd(a.cash)} tone="gold" />
+            </div>
           </div>
         </div>
       </section>
@@ -404,7 +428,7 @@ export default function GrowthCommand() {
         </div>
         <table className="tbl">
           <thead><tr>
-            <th>Niche</th><th className="r">Spend</th><th className="r">Booked</th>
+            <th>Niche</th><th className="r">Spend</th><th className="r">New</th><th className="r">Live</th>
             <th className="r">Show %</th><th className="r">Close %</th><th className="cac-col">CAC</th><th className="r">Cash</th>
           </tr></thead>
           <tbody>
@@ -412,7 +436,8 @@ export default function GrowthCommand() {
               <tr key={b.niche}>
                 <td className="strong">{b.niche}</td>
                 <td className="r mono">{usd(b.spend)}</td>
-                <td className="r mono">{b.booked || "—"}</td>
+                <td className="r mono">{b.newCalls || "—"}</td>
+                <td className="r mono">{b.liveCalls || "—"}</td>
                 <td className="r mono">{pctf(b.showRate)}</td>
                 <td className="r mono">{pctf(b.closeRate)}</td>
                 <td className="cac-col"><div className="cac-cell">
@@ -534,14 +559,19 @@ section.panel{margin-bottom:14px;}
 .legend span{display:inline-flex;align-items:center;gap:6px;}
 .sw{width:9px;height:9px;border-radius:2px;display:inline-block;}
 .sw-gold{background:var(--gold);}.sw-teal{background:var(--teal);}
-.funnel{display:flex;flex-direction:column;gap:14px;padding-top:2px;}
-.fn-row{position:relative;}
-.fn-top{display:flex;justify-content:space-between;margin-bottom:5px;}
-.fn-label{font-size:11px;color:var(--dim);font-weight:500;}
-.fn-val{font-family:'IBM Plex Mono';font-size:14px;font-weight:600;}
-.fn-track{height:9px;background:#111826;border-radius:5px;overflow:hidden;}
-.fn-fill{height:100%;border-radius:5px;transition:width .5s cubic-bezier(.4,0,.2,1);}
-.fn-conv{position:absolute;right:0;top:-1px;font-size:9.5px;color:var(--faint);font-family:'IBM Plex Mono';}
+.split{display:flex;flex-direction:column;gap:16px;}
+.split-sec{display:flex;flex-direction:column;}
+.split-head{font-size:9.5px;letter-spacing:.16em;font-weight:700;padding-bottom:7px;margin-bottom:3px;border-bottom:1px solid var(--line);}
+.split-head.mkt{color:var(--violet);}
+.split-head.sal{color:var(--gold);}
+.sr{display:flex;justify-content:space-between;align-items:center;padding:6px 0;}
+.sr-label{font-size:12px;color:var(--dim);}
+.sr-right{display:flex;align-items:center;gap:9px;}
+.sr-pct{font-size:10.5px;color:var(--teal);font-family:'IBM Plex Mono',monospace;}
+.sr-val{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:500;color:var(--text);font-variant-numeric:tabular-nums;}
+.sr-val.strong{font-weight:700;font-size:15px;}
+.sr-val.teal{color:var(--teal);}
+.sr-val.gold{color:var(--gold);}
 .tbl{width:100%;border-collapse:collapse;font-size:12px;}
 .tbl th{text-align:left;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:0 10px 9px;border-bottom:1px solid var(--line);}
 .tbl th.r,.tbl td.r{text-align:right;}
