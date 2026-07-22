@@ -212,11 +212,11 @@ export default function GrowthCommand() {
       (offer === "All" || r.offer === offer) &&
       inWin(r.date));
 
-    // APPOINTMENTS (funnel) — niche + closer; offer lenient (sales rows rarely carry offer)
+    // APPOINTMENTS (funnel) — keyed off CALL date (Appointment Time/Date), not booked date
     const fAppts = src.appts.filter((r) =>
       nMatch(r["Niche/Offer"]) &&
       (closer === "All" || r["Closer"] === closer) &&
-      inWin(r["Date"]));
+      inWin(r["Appointment Time/Date"]));
 
     // LEADS
     const fLeads = src.leads.filter((r) =>
@@ -254,7 +254,7 @@ export default function GrowthCommand() {
     const tmap = {};
     const key = (v) => { const k = dayKey(v); return k ? k.slice(5) : null; };
     fMeta.forEach((r) => { const k = key(r.date); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).spend += num(r.spend); });
-    fAppts.forEach((r) => { const k = key(r["Date"]); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).booked += 1; });
+    fAppts.forEach((r) => { const k = key(r["Appointment Time/Date"]); if (!k) return; (tmap[k] ??= { date: k, spend: 0, booked: 0 }).booked += 1; });
     const trend = Object.values(tmap).sort((a, b) => a.date.localeCompare(b.date))
       .map((d) => ({ ...d, spend: Math.round(d.spend) }));
 
