@@ -313,20 +313,23 @@ export default function GrowthCommand() {
     const ads = Object.values(amap).map((o) => ({ ...o, spend: Math.round(o.spend), cps: o.sched ? o.spend / o.sched : Infinity }))
       .sort((a, b) => b.spend - a.spend);
 
-    // closer scoreboard — shows from appointments, closes + cash from the cash sheet
+    // closer scoreboard — calls/shows from appointments, closes/cash/expected from cash sheet
     const cmap = {};
+    const CL = (k) => (cmap[k] ??= { closer: k, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0 });
     fApptsCall.forEach((r) => {
-      const k = r["Closer"] || "(none)";
-      const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
+      const o = CL(r["Closer"] || "(none)");
+      o.liveCalls++;
       if (classify(r["Status (GHL Pipeline)"]).show) o.shows++;
     });
     fCash.forEach((r) => {
-      const k = r["Owner"] || "(none)";
-      const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
-      o.closes++; o.cash += num(r["Cash Up Front"]);
+      const o = CL(r["Owner"] || "(none)");
+      o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]);
     });
-    const closers = Object.values(cmap).map((o) => ({ ...o, closeRate: o.shows ? o.closes / o.shows : NaN }))
-      .sort((a, b) => b.cash - a.cash);
+    const closers = Object.values(cmap).map((o) => ({
+      ...o,
+      showRate: o.liveCalls ? o.shows / o.liveCalls : NaN,
+      closeRate: o.shows ? o.closes / o.shows : NaN,
+    })).sort((a, b) => b.cash - a.cash);
 
     return { agg, trend, breakdown, ads, closers };
   }, [src, niche, offer, closer, from, to]);
@@ -489,39 +492,54 @@ export default function GrowthCommand() {
         </div>
       </section>
 
-      <section className="mid">
-        <div className="panel">
-          <div className="panel-head"><h3>Top ads · spend</h3><span className="hint">ad-level CAC comes with attribution</span></div>
-          <table className="tbl compact">
-            <thead><tr><th>Ad</th><th className="r">Spend</th><th className="r">Meta sched</th><th className="r">Cost/sched</th></tr></thead>
-            <tbody>
-              {model.ads.slice(0, 7).map((ad) => (
-                <tr key={ad.ad}>
-                  <td><span className="ad-name">{ad.ad}</span><span className="ad-niche">{ad.niche}</span></td>
-                  <td className="r mono">{usd(ad.spend)}</td>
-                  <td className="r mono">{ad.sched || "—"}</td>
-                  <td className="r mono">{ad.cps === Infinity ? "—" : usd(ad.cps)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section className="panel">
+        <div className="panel-head"><h3>Top ads · spend</h3><span className="hint">ad-level CAC comes with attribution</span></div>
+        <div className="tbl-scroll">
+        <table className="tbl compact">
+          <thead><tr><th>Ad</th><th className="r">Spend</th><th className="r">Meta sched</th><th className="r">Cost/sched</th></tr></thead>
+          <tbody>
+            {model.ads.slice(0, 8).map((ad) => (
+              <tr key={ad.ad}>
+                <td><span className="ad-name">{ad.ad}</span><span className="ad-niche">{ad.niche}</span></td>
+                <td className="r mono">{usd(ad.spend)}</td>
+                <td className="r mono">{ad.sched || "—"}</td>
+                <td className="r mono">{ad.cps === Infinity ? "—" : usd(ad.cps)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
         </div>
+      </section>
 
-        <div className="panel">
-          <div className="panel-head"><h3>Closer scoreboard</h3></div>
-          <table className="tbl compact">
-            <thead><tr><th>Closer</th><th className="r">Shows</th><th className="r">Close %</th><th className="r">Cash</th></tr></thead>
-            <tbody>
-              {model.closers.slice(0, 7).map((c) => (
-                <tr key={c.closer}>
-                  <td className="strong">{c.closer}</td>
-                  <td className="r mono">{c.shows}</td>
-                  <td className="r mono">{pctf(c.closeRate)}</td>
-                  <td className="r mono gold-txt">{usd(c.cash)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section className="panel">
+        <div className="panel-head"><h3>Closer scoreboard</h3><span className="hint">calls · shows · closes · cash</span></div>
+        <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr>
+            <th>Closer</th>
+            <th className="r">Live calls</th>
+            <th className="r">Shows</th>
+            <th className="r">Show %</th>
+            <th className="r">Closes</th>
+            <th className="r">Close %</th>
+            <th className="r">Cash</th>
+            <th className="r">Expected</th>
+          </tr></thead>
+          <tbody>
+            {model.closers.map((c) => (
+              <tr key={c.closer}>
+                <td className="strong">{c.closer}</td>
+                <td className="r mono">{c.liveCalls || "—"}</td>
+                <td className="r mono">{c.shows || "—"}</td>
+                <td className="r mono dim">{pctf(c.showRate)}</td>
+                <td className="r mono strong">{c.closes || "—"}</td>
+                <td className="r mono dim">{pctf(c.closeRate)}</td>
+                <td className="r mono gold-txt">{usd(c.cash)}</td>
+                <td className="r mono dim">{usd(c.dealSize)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
         </div>
       </section>
 
