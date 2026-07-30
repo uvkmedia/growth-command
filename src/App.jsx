@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { ChevronDown, TrendingDown, TrendingUp, Target, Zap, AlertTriangle } from "lucide-react";
+import { ChevronDown, TrendingDown, TrendingUp, Target, Zap, AlertTriangle, Sun, Moon } from "lucide-react";
 
 /* ================================================================== */
 /*  LIVE FEED — reads your n8n dashboard-data endpoint                 */
@@ -175,6 +175,7 @@ export default function GrowthCommand() {
   const [closer, setCloser] = useState("All");
   const [from, setFrom] = useState(agoStr(30));
   const [to, setTo] = useState(todayStr());
+  const [theme, setTheme] = useState("light");
 
   useEffect(() => {
     let alive = true;
@@ -282,19 +283,25 @@ export default function GrowthCommand() {
     const trend = Object.values(tmap).sort((a, b) => a.date.localeCompare(b.date))
       .map((d) => ({ ...d, spend: Math.round(d.spend) }));
 
-    // breakdown by NICHE
+    // breakdown by NICHE — full funnel: spend, leads, booked, shows, closes, cash
     const bmap = {};
-    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0 });
+    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0 });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
+    fLeads.forEach((r) => { B(canonNiche(r["Niche/Offer"])).leads++; });
     fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
-    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; const c = classify(r["Status (GHL Pipeline)"]); if (c.show) o.shows++; });
+    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; if (classify(r["Status (GHL Pipeline)"]).show) o.shows++; });
     fCash.forEach((r) => { const o = B(canonNiche(r["Niche"])); o.closes++; o.cash += num(r["Amount"]); });
-    const breakdown = Object.values(bmap).map((o) => ({
-      ...o, spend: Math.round(o.spend),
-      cac: o.closes ? o.spend / o.closes : Infinity,
-      showRate: o.liveCalls ? o.shows / o.liveCalls : NaN,
-      closeRate: o.shows ? o.closes / o.shows : NaN,
-    })).sort((a, b) => b.spend - a.spend);
+    const breakdown = Object.values(bmap)
+      .filter((o) => o.niche && o.niche !== "Unmapped")
+      .map((o) => ({
+        ...o, spend: Math.round(o.spend),
+        costPerLead: o.leads ? o.spend / o.leads : Infinity,
+        costPerBooked: o.newCalls ? o.spend / o.newCalls : Infinity,
+        bookRate: o.leads ? o.newCalls / o.leads : NaN,
+        showRate: o.newCalls ? o.shows / o.newCalls : NaN,
+        closeRate: o.shows ? o.closes / o.shows : NaN,
+        cac: o.closes ? o.spend / o.closes : Infinity,
+      })).sort((a, b) => b.spend - a.spend);
 
     // top ads (meta only — real ad-level spend + Meta schedules; CAC needs attribution, later)
     const amap = {};
@@ -325,9 +332,9 @@ export default function GrowthCommand() {
   }, [src, niche, offer, closer, from, to]);
 
   /* ---- render states ---- */
-  if (loading) return <Shell><div className="state">Loading your live data…</div></Shell>;
+  if (loading) return <Shell theme={theme}><div className="state">Loading your live data…</div></Shell>;
   if (err) return (
-    <Shell>
+    <Shell theme={theme}>
       <div className="state err">
         <AlertTriangle size={20} />
         <div>
@@ -340,9 +347,17 @@ export default function GrowthCommand() {
   );
 
   const a = model.agg;
+  const dark = theme === "dark";
+  const chart = {
+    grid: dark ? "#1E2836" : "#E6EAF0",
+    tick: dark ? "#58657A" : "#8A94A6",
+    axis: dark ? "#263042" : "#D6DBE2",
+    series: dark ? "#46C7B8" : "#1C9E90",
+  };
+  const TT = dark ? TT_DARK : TT_LIGHT;
 
   return (
-    <Shell>
+    <Shell theme={theme}>
       <header className="gc-head">
         <div className="brand">
           <div className="brand-mark"><Zap size={15} strokeWidth={2.5} /></div>
@@ -369,6 +384,9 @@ export default function GrowthCommand() {
               <button className="dr-chip" onClick={() => { setFrom(""); setTo(todayStr()); }}>All</button>
             </div>
           </div>
+          <button className="theme-btn" onClick={() => setTheme(dark ? "light" : "dark")} title="Toggle theme">
+            {dark ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
         </div>
       </header>
 
@@ -394,13 +412,13 @@ export default function GrowthCommand() {
                   <stop offset="100%" stopColor="#F0B54A" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#1E2836" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={{ stroke: "#263042" }} interval={Math.max(0, Math.ceil(model.trend.length / 8))} />
-              <YAxis yAxisId="l" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} />
-              <YAxis yAxisId="r" orientation="right" tick={{ fill: "#58657A", fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} width={26} />
-              <Tooltip contentStyle={TT} labelStyle={{ color: "#EAEEF6", fontFamily: "IBM Plex Mono", fontSize: 11 }} formatter={(v, n) => [n === "spend" ? usd(v) : v, n === "spend" ? "Spend" : "New calls"]} />
-              <Area yAxisId="l" type="monotone" dataKey="spend" stroke="#F0B54A" strokeWidth={2} fill="url(#gSpend)" />
-              <Line yAxisId="r" type="monotone" dataKey="newCalls" stroke="#46C7B8" strokeWidth={2} dot={false} />
+              <CartesianGrid stroke={chart.grid} vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: chart.tick, fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={{ stroke: chart.axis }} interval={Math.max(0, Math.ceil(model.trend.length / 8))} />
+              <YAxis yAxisId="l" tick={{ fill: chart.tick, fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} />
+              <YAxis yAxisId="r" orientation="right" tick={{ fill: chart.tick, fontSize: 10, fontFamily: "IBM Plex Mono" }} tickLine={false} axisLine={false} width={26} />
+              <Tooltip contentStyle={TT} labelStyle={{ color: dark ? "#EAEEF6" : "#1B2432", fontFamily: "IBM Plex Mono", fontSize: 11 }} formatter={(v, n) => [n === "spend" ? usd(v) : v, n === "spend" ? "Spend" : "New calls"]} />
+              <Area yAxisId="l" type="monotone" dataKey="spend" stroke="#E0A82F" strokeWidth={2} fill="url(#gSpend)" />
+              <Line yAxisId="r" type="monotone" dataKey="newCalls" stroke={chart.series} strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -430,31 +448,42 @@ export default function GrowthCommand() {
       <section className="panel">
         <div className="panel-head">
           <h3>Niche breakdown</h3>
-          <span className="hint"><Target size={12} /> CAC vs {usd(TARGET.cac)} · spend÷closes</span>
+          <span className="hint"><Target size={12} /> volumes · conversion % · CAC vs {usd(TARGET.cac)}</span>
         </div>
+        <div className="tbl-scroll">
         <table className="tbl">
           <thead><tr>
-            <th>Niche</th><th className="r">Spend</th><th className="r">New</th><th className="r">Live</th>
-            <th className="r">Show %</th><th className="r">Close %</th><th className="cac-col">CAC</th><th className="r">Cash</th>
+            <th>Niche</th>
+            <th className="r">Spend</th>
+            <th className="r">Leads</th>
+            <th className="r">Booked</th>
+            <th className="r">Book %</th>
+            <th className="r">Shows</th>
+            <th className="r">Show %</th>
+            <th className="r">Closes</th>
+            <th className="r">Close %</th>
+            <th className="r">CAC</th>
+            <th className="r">Cash</th>
           </tr></thead>
           <tbody>
             {model.breakdown.map((b) => (
               <tr key={b.niche}>
                 <td className="strong">{b.niche}</td>
                 <td className="r mono">{usd(b.spend)}</td>
+                <td className="r mono">{b.leads || "—"}</td>
                 <td className="r mono">{b.newCalls || "—"}</td>
-                <td className="r mono">{b.liveCalls || "—"}</td>
-                <td className="r mono">{pctf(b.showRate)}</td>
-                <td className="r mono">{pctf(b.closeRate)}</td>
-                <td className="cac-col"><div className="cac-cell">
-                  <span className={"mono " + (b.cac > TARGET.cac ? "coral" : b.cac === Infinity ? "faint" : "teal")}>{b.cac === Infinity ? "—" : usd(b.cac)}</span>
-                  {b.cac !== Infinity && <EffBar value={b.cac} target={TARGET.cac} />}
-                </div></td>
+                <td className="r mono dim">{pctf(b.bookRate)}</td>
+                <td className="r mono">{b.shows || "—"}</td>
+                <td className="r mono dim">{pctf(b.showRate)}</td>
+                <td className="r mono strong">{b.closes || "—"}</td>
+                <td className="r mono dim">{pctf(b.closeRate)}</td>
+                <td className={"r mono " + (b.cac === Infinity ? "faint" : b.cac > TARGET.cac ? "coral" : "teal")}>{b.cac === Infinity ? "—" : usd(b.cac)}</td>
                 <td className="r mono gold-txt">{usd(b.cash)}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       </section>
 
       <section className="mid">
@@ -500,11 +529,12 @@ export default function GrowthCommand() {
   );
 }
 
-function Shell({ children }) {
-  return <div className="gc-root"><style>{CSS}</style>{children}</div>;
+function Shell({ children, theme = "light" }) {
+  return <div className={"gc-root " + theme}><style>{CSS}</style>{children}</div>;
 }
 
-const TT = { background: "#151C28", border: "1px solid #263042", borderRadius: 8, fontSize: 11 };
+const TT_DARK = { background: "#151C28", border: "1px solid #263042", borderRadius: 8, fontSize: 11 };
+const TT_LIGHT = { background: "#FFFFFF", border: "1px solid #E3E7EE", borderRadius: 8, fontSize: 11 };
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -513,10 +543,24 @@ const CSS = `
   --text:#EAEEF6; --dim:#8794A8; --faint:#556377;
   --gold:#F0B54A; --gold-soft:rgba(240,181,74,.12);
   --teal:#46C7B8; --teal-bright:#5FE0CF; --coral:#EB6A57; --violet:#7B8CF4;
+  --track:#111826; --shadow:0 0 0 rgba(0,0,0,0);
   background:var(--ink); color:var(--text); font-family:'Inter',system-ui,sans-serif;
   min-height:100%; padding:22px; box-sizing:border-box;
   background-image:radial-gradient(1200px 500px at 78% -10%, rgba(240,181,74,.06), transparent 60%);
 }
+.gc-root.light{
+  --ink:#F4F6FA; --panel:#FFFFFF; --panel2:#FFFFFF; --line:#E3E7EE; --line-soft:#EAEEF4;
+  --text:#1B2432; --dim:#5B6675; --faint:#95A0B0;
+  --gold:#B07E1C; --gold-soft:rgba(176,126,28,.10);
+  --teal:#1C9E90; --teal-bright:#17A594; --coral:#CE4B39; --violet:#5566D6;
+  --track:#EAEEF4; --shadow:0 1px 3px rgba(20,30,50,.06);
+  background-image:radial-gradient(1200px 500px at 78% -10%, rgba(176,126,28,.05), transparent 60%);
+}
+.gc-root.light .panel,.gc-root.light .kpi{box-shadow:var(--shadow);}
+.gc-root.light .dr-input{color-scheme:light;}
+.theme-btn{align-self:flex-end;background:var(--panel);border:1px solid var(--line);color:var(--dim);width:34px;height:34px;border-radius:8px;display:grid;place-items:center;cursor:pointer;}
+.theme-btn:hover{border-color:#8894a8;color:var(--text);}
+.tbl-scroll{overflow-x:auto;}
 .gc-root *{box-sizing:border-box;}
 .mono{font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums;}
 .state{padding:60px 20px;text-align:center;color:var(--dim);font-size:14px;}
@@ -589,7 +633,7 @@ section.panel{margin-bottom:14px;}
 .cac-col{width:150px;}
 .cac-cell{display:flex;align-items:center;justify-content:flex-end;gap:9px;}
 .effbar{width:64px;}
-.effbar-track{position:relative;height:5px;background:#111826;border-radius:3px;}
+.effbar-track{position:relative;height:5px;background:var(--track);border-radius:3px;}
 .effbar-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;transition:width .5s;}
 .effbar-target{position:absolute;top:-2px;bottom:-2px;width:1.5px;background:var(--dim);opacity:.6;}
 .ad-name{display:block;font-family:'IBM Plex Mono';font-size:11.5px;}
