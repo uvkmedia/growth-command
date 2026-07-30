@@ -440,6 +440,7 @@ export default function GrowthCommand() {
               <StatRow label="No-shows" value={a.noshows} />
               <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong />
               <StatRow label="Cash collected" value={usd(a.cash)} tone="gold" />
+              <StatRow label="Expected cash (deals)" value={usd(a.dealSize)} tone="gold" />
             </div>
           </div>
         </div>
@@ -464,6 +465,7 @@ export default function GrowthCommand() {
             <th className="r">Close %</th>
             <th className="r">CAC</th>
             <th className="r">Cash</th>
+            <th className="r">Expected</th>
           </tr></thead>
           <tbody>
             {model.breakdown.map((b) => (
@@ -479,6 +481,7 @@ export default function GrowthCommand() {
                 <td className="r mono dim">{pctf(b.closeRate)}</td>
                 <td className={"r mono " + (b.cac === Infinity ? "faint" : b.cac > TARGET.cac ? "coral" : "teal")}>{b.cac === Infinity ? "—" : usd(b.cac)}</td>
                 <td className="r mono gold-txt">{usd(b.cash)}</td>
+                <td className="r mono dim">{usd(b.dealSize)}</td>
               </tr>
             ))}
           </tbody>
