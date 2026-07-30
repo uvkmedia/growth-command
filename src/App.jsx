@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
-  ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine,
 } from "recharts";
 import { ChevronDown, TrendingDown, TrendingUp, Target, Zap, AlertTriangle, Sun, Moon } from "lucide-react";
 
@@ -118,7 +118,7 @@ function Dropdown({ label, value, options, onChange }) {
   );
 }
 
-function Kpi({ label, value, sub, tone, delta, money }) {
+function Kpi({ label, value, sub, tone, goalText, hit, money }) {
   const isNum = typeof value === "number";
   const animated = useCountUp(isNum ? value : 0);
   const display = isNum ? (money ? usd(animated) : nf(Math.round(animated))) : value;
@@ -128,20 +128,18 @@ function Kpi({ label, value, sub, tone, delta, money }) {
       <div className={"kpi-val " + (tone || "")}>{display}</div>
       <div className="kpi-foot">
         <span className="kpi-sub">{sub}</span>
-        {delta != null && (
-          <span className={"kpi-delta " + (delta <= 0 ? "good" : "bad")}>
-            {delta <= 0 ? <TrendingDown size={11} /> : <TrendingUp size={11} />}{Math.abs(delta)}%
-          </span>
+        {goalText && (
+          <span className={"kpi-goal " + (hit ? "good" : "bad")}>{hit ? "✓" : "▲"} {goalText}</span>
         )}
       </div>
     </div>
   );
 }
 
-function StatRow({ label, value, pct, tone, strong }) {
+function StatRow({ label, value, pct, tone, strong, goalText, hit }) {
   return (
     <div className="sr">
-      <span className="sr-label">{label}</span>
+      <span className="sr-label">{label}{goalText != null && <span className={"sr-goal " + (hit ? "g" : "b")}>{goalText}</span>}</span>
       <span className="sr-right">
         {pct != null && !isNaN(pct) && <span className="sr-pct">{pctf(pct)}</span>}
         <span className={"sr-val " + (tone || "") + (strong ? " strong" : "")}>{value}</span>
@@ -194,6 +192,7 @@ export default function GrowthCommand() {
       appts: (raw.appointments || []).map(trimKeys),
       leads: (raw.leads || []).map(trimKeys),
       cash:  (raw.cash || []).map(trimKeys),
+      goals: (raw.goals || []).map(trimKeys),
     };
   }, [raw]);
 
@@ -350,6 +349,28 @@ export default function GrowthCommand() {
   );
 
   const a = model.agg;
+
+  // ---- goals: scale to the selected window ----
+  const goalMap = {};
+  (src.goals || []).forEach((r) => {
+    const k = String(r.metric_key || "").trim();
+    if (k) goalMap[k] = { monthly: num(r.monthly), weekly: num(r.weekly), daily: num(r.daily) };
+  });
+  const spanDays = (() => {
+    if (!from) return 30;
+    const f = new Date(from + "T00:00:00").getTime();
+    const t = (to ? new Date(to + "T23:59:59").getTime() : Date.now());
+    return Math.max(1, Math.round((t - f) / 864e5));
+  })();
+  const gPeriod = spanDays <= 1 ? "daily" : spanDays <= 10 ? "weekly" : "monthly";
+  const gVol = (k) => (goalMap[k] ? goalMap[k].daily * spanDays : null);   // volumes scale by days
+  const gRate = (k) => (goalMap[k] ? goalMap[k][gPeriod] : null);          // rates use period target
+  const goalInfo = (actual, goal, lowerBetter, fmt) => {
+    if (goal == null || isNaN(goal) || goal === 0) return {};
+    const hit = lowerBetter ? actual <= goal : actual >= goal;
+    return { goalText: "goal " + fmt(goal), hit };
+  };
+  const gInt = (n) => nf(Math.round(n));
   const dark = theme === "dark";
   const chart = {
     grid: dark ? "#1E2836" : "#E6EAF0",
@@ -394,11 +415,11 @@ export default function GrowthCommand() {
       </header>
 
       <section className="kpis">
-        <Kpi label="AD SPEND" value={a.spend} money sub={`${model.trend.length} days`} />
-        <Kpi label="NEW CALLS" value={a.newCalls} sub={a.costPerNewCall === Infinity ? "—" : `${usd(a.costPerNewCall)} / call`} />
-        <Kpi label="CAC" value={a.cac === Infinity ? "—" : Math.round(a.cac)} money tone={a.cac > TARGET.cac ? "warn" : "ok"} sub={`target ${usd(TARGET.cac)}`} />
-        <Kpi label="SHOWS" value={a.shows} tone="ok" sub={`${pctf(a.showRate)} show rate`} />
-        <Kpi label="CASH / CALL" value={Math.round(a.cashPerCall)} money tone="gold" sub={`${usd(a.cash)} cash · ${usd(a.dealSize)} deals`} />
+        <Kpi label="AD SPEND" value={a.spend} money sub={`${model.trend.length} days`} {...goalInfo(a.spend, gVol("spend"), false, usd)} />
+        <Kpi label="NEW CALLS" value={a.newCalls} sub={a.costPerNewCall === Infinity ? "—" : `${usd(a.costPerNewCall)} / call`} {...goalInfo(a.newCalls, gVol("new_calls"), false, gInt)} />
+        <Kpi label="CAC" value={a.cac === Infinity ? "—" : Math.round(a.cac)} money tone={a.cac > TARGET.cac ? "warn" : "ok"} {...goalInfo(a.cac, gRate("cac"), true, usd)} />
+        <Kpi label="SHOWS" value={a.shows} tone="ok" sub={`${pctf(a.showRate)} show rate`} {...goalInfo(a.shows, gVol("shows"), false, gInt)} />
+        <Kpi label="CASH" value={a.cash} money tone="gold" sub={`${usd(a.dealSize)} expected`} {...goalInfo(a.cash, gVol("cash"), false, usd)} />
       </section>
 
       <section className="mid">
@@ -422,6 +443,9 @@ export default function GrowthCommand() {
               <Tooltip contentStyle={TT} labelStyle={{ color: dark ? "#EAEEF6" : "#1B2432", fontFamily: "IBM Plex Mono", fontSize: 11 }} formatter={(v, n) => [n === "spend" ? usd(v) : v, n === "spend" ? "Spend" : "New calls"]} />
               <Area yAxisId="l" type="monotone" dataKey="spend" stroke="#E0A82F" strokeWidth={2} fill="url(#gSpend)" />
               <Line yAxisId="r" type="monotone" dataKey="newCalls" stroke={chart.series} strokeWidth={2} dot={false} />
+              {goalMap.spend && goalMap.spend.daily > 0 && (
+                <ReferenceLine yAxisId="l" y={goalMap.spend.daily} stroke="#E0A82F" strokeDasharray="4 4" strokeOpacity={0.5} />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -431,18 +455,18 @@ export default function GrowthCommand() {
           <div className="split">
             <div className="split-sec">
               <div className="split-head mkt">MARKETING</div>
-              <StatRow label="Ad spend" value={usd(a.spend)} />
-              <StatRow label="Leads" value={a.leadsCount} />
-              <StatRow label="New calls scheduled" value={a.newCalls} strong />
-              <StatRow label="Cost / new call" value={a.costPerNewCall === Infinity ? "—" : usd(a.costPerNewCall)} />
+              <StatRow label="Ad spend" value={usd(a.spend)} {...goalInfo(a.spend, gVol("spend"), false, usd)} />
+              <StatRow label="Leads" value={a.leadsCount} {...goalInfo(a.leadsCount, gVol("leads"), false, gInt)} />
+              <StatRow label="New calls scheduled" value={a.newCalls} strong {...goalInfo(a.newCalls, gVol("new_calls"), false, gInt)} />
+              <StatRow label="Cost / new call" value={a.costPerNewCall === Infinity ? "—" : usd(a.costPerNewCall)} {...goalInfo(a.costPerNewCall, gRate("cost_per_new_call"), true, usd)} />
             </div>
             <div className="split-sec">
               <div className="split-head sal">SALES · calls on calendar</div>
               <StatRow label="Live calls on calendar" value={a.liveCalls} strong />
-              <StatRow label="Shows" value={a.shows} pct={a.showRate} tone="teal" />
+              <StatRow label="Shows" value={a.shows} pct={a.showRate} tone="teal" {...goalInfo(a.shows, gVol("shows"), false, gInt)} />
               <StatRow label="No-shows" value={a.noshows} />
-              <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong />
-              <StatRow label="Cash collected" value={usd(a.cash)} tone="gold" />
+              <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong {...goalInfo(a.closes, gVol("closes"), false, gInt)} />
+              <StatRow label="Cash collected" value={usd(a.cash)} tone="gold" {...goalInfo(a.cash, gVol("cash"), false, usd)} />
               <StatRow label="Expected cash (deals)" value={usd(a.dealSize)} tone="gold" />
             </div>
           </div>
@@ -618,8 +642,10 @@ const CSS = `
 .kpi-val.gold{color:var(--gold);}.kpi-val.ok{color:var(--teal);}.kpi-val.warn{color:var(--coral);}
 .kpi-foot{display:flex;justify-content:space-between;align-items:center;margin-top:11px;gap:8px;}
 .kpi-sub{font-size:10px;color:var(--dim);font-family:'IBM Plex Mono';}
-.kpi-delta{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:600;font-family:'IBM Plex Mono';}
-.kpi-delta.good{color:var(--teal);}.kpi-delta.bad{color:var(--coral);}
+.kpi-goal{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;font-family:'IBM Plex Mono';}
+.kpi-goal.good{color:var(--teal);}.kpi-goal.bad{color:var(--coral);}
+.sr-goal{font-size:9.5px;font-family:'IBM Plex Mono';margin-left:8px;}
+.sr-goal.g{color:var(--teal);}.sr-goal.b{color:var(--coral);}
 .mid{display:grid;grid-template-columns:1.9fr 1fr;gap:12px;margin-bottom:14px;}
 .panel{background:var(--panel);border:1px solid var(--line-soft);border-radius:12px;padding:15px 16px;}
 section.panel{margin-bottom:14px;}
