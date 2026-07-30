@@ -21,7 +21,7 @@ const NICHE_CANON = [
   [/neurofeedback|nfb/i, "Neurofeedback"],
   [/function|fun ?med|\bfm\b/i, "Functional Medicine"],
   [/neuropath|npy/i, "Neuropathy"],
-  [/shock/i, "Shockwave"],
+  [/shock|softwave|soft wave|stemwave|stem wave/i, "Shockwave"],
   [/decomp/i, "Spinal Decompression"],
   [/retarget|warm/i, "Retargeting"],
 ];
@@ -263,10 +263,10 @@ export default function GrowthCommand() {
 
     const closes = fCash.length;                   // closes = actual deals from cash sheet
     const leadsCount = fLeads.length;
-    let cash = 0;
-    fCash.forEach((r) => { cash += num(r["Amount"]); });
+    let cash = 0, dealSize = 0;
+    fCash.forEach((r) => { cash += num(r["Cash Up Front"]); dealSize += num(r["Total Deal Size"]); });
 
-    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash };
+    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash, dealSize };
     agg.costPerNewCall = newCalls ? spend / newCalls : Infinity;
     agg.showRate = liveCalls ? shows / liveCalls : NaN;
     agg.closeRate = shows ? closes / shows : NaN;
@@ -285,12 +285,12 @@ export default function GrowthCommand() {
 
     // breakdown by NICHE — full funnel: spend, leads, booked, shows, closes, cash
     const bmap = {};
-    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0 });
+    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0 });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
     fLeads.forEach((r) => { B(canonNiche(r["Niche/Offer"])).leads++; });
     fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
     fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; if (classify(r["Status (GHL Pipeline)"]).show) o.shows++; });
-    fCash.forEach((r) => { const o = B(canonNiche(r["Niche"])); o.closes++; o.cash += num(r["Amount"]); });
+    fCash.forEach((r) => { const o = B(canonNiche(r["Niche"])); o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]); });
     const breakdown = Object.values(bmap)
       .filter((o) => o.niche && o.niche !== "Unmapped")
       .map((o) => ({
@@ -323,7 +323,7 @@ export default function GrowthCommand() {
     fCash.forEach((r) => {
       const k = r["Owner"] || "(none)";
       const o = (cmap[k] ??= { closer: k, shows: 0, closes: 0, cash: 0 });
-      o.closes++; o.cash += num(r["Amount"]);
+      o.closes++; o.cash += num(r["Cash Up Front"]);
     });
     const closers = Object.values(cmap).map((o) => ({ ...o, closeRate: o.shows ? o.closes / o.shows : NaN }))
       .sort((a, b) => b.cash - a.cash);
@@ -395,7 +395,7 @@ export default function GrowthCommand() {
         <Kpi label="NEW CALLS" value={a.newCalls} sub={a.costPerNewCall === Infinity ? "—" : `${usd(a.costPerNewCall)} / call`} />
         <Kpi label="CAC" value={a.cac === Infinity ? "—" : Math.round(a.cac)} money tone={a.cac > TARGET.cac ? "warn" : "ok"} sub={`target ${usd(TARGET.cac)}`} />
         <Kpi label="SHOWS" value={a.shows} tone="ok" sub={`${pctf(a.showRate)} show rate`} />
-        <Kpi label="CASH / CALL" value={Math.round(a.cashPerCall)} money tone="gold" sub={`${a.roas.toFixed(1)}x ROAS · ${usd(a.cash)}`} />
+        <Kpi label="CASH / CALL" value={Math.round(a.cashPerCall)} money tone="gold" sub={`${usd(a.cash)} cash · ${usd(a.dealSize)} deals`} />
       </section>
 
       <section className="mid">
