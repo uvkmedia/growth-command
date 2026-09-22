@@ -183,6 +183,7 @@ export default function GrowthCommand() {
   const [from, setFrom] = useState(agoStr(30));
   const [to, setTo] = useState(todayStr());
   const [theme, setTheme] = useState("light");
+  const [view, setView] = useState("calls");   // "calls" | "contacts"
 
   useEffect(() => {
     let alive = true;
@@ -262,19 +263,42 @@ export default function GrowthCommand() {
     let spend = 0, impressions = 0;
     fMeta.forEach((r) => { spend += num(r.spend); impressions += num(r.impressions); });
 
-    const newCalls = fApptsBooked.length;          // marketing: booked in window
-    let liveCalls = fApptsCall.length, shows = 0, noshows = 0;
-    fApptsCall.forEach((r) => {
-      const c = classify(r["Status (GHL Pipeline)"]);
-      if (c.show) shows++; if (c.noshow) noshows++;
-    });
+    const isC = view === "contacts";
+    const emailOf = (r) => String(r["Email"] || "").trim().toLowerCase();
+
+    let newCalls, liveCalls, shows, noshows, callsPerContact = null;
+    const totalCallRows = fApptsCall.length;
+    if (!isC) {
+      newCalls = fApptsBooked.length;
+      liveCalls = totalCallRows; shows = 0; noshows = 0;
+      fApptsCall.forEach((r) => {
+        const c = classify(r["Status (GHL Pipeline)"]);
+        if (c.show) shows++; if (c.noshow) noshows++;
+      });
+    } else {
+      const bSet = new Set(), vSet = new Set(), sSet = new Set(), nsSet = new Set();
+      fApptsBooked.forEach((r) => { const e = emailOf(r); if (e) bSet.add(e); });
+      fApptsCall.forEach((r) => {
+        const e = emailOf(r); if (!e) return;
+        vSet.add(e);
+        const c = classify(r["Status (GHL Pipeline)"]);
+        if (c.show) sSet.add(e); if (c.noshow) nsSet.add(e);
+      });
+      newCalls = bSet.size;
+      liveCalls = vSet.size;
+      shows = sSet.size;
+      noshows = [...nsSet].filter((e) => !sSet.has(e)).length;  // never showed
+      callsPerContact = vSet.size ? totalCallRows / vSet.size : null;
+    }
 
     const closes = fCash.length;                   // closes = actual deals from cash sheet
-    const leadsCount = fLeads.length;
+    const leadsCount = isC
+      ? new Set(fLeads.map(emailOf).filter(Boolean)).size
+      : fLeads.length;
     let cash = 0, dealSize = 0;
     fCash.forEach((r) => { cash += num(r["Cash Up Front"]); dealSize += num(r["Total Deal Size"]); });
 
-    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash, dealSize };
+    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash, dealSize, callsPerContact, totalCallRows };
     agg.costPerNewCall = newCalls ? spend / newCalls : Infinity;
     agg.showRate = liveCalls ? shows / liveCalls : NaN;
     agg.closeRate = shows ? closes / shows : NaN;
@@ -293,12 +317,19 @@ export default function GrowthCommand() {
 
     // breakdown by NICHE — full funnel: spend, leads, booked, shows, closes, cash
     const bmap = {};
-    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0 });
+    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0,
+      _l: new Set(), _b: new Set(), _v: new Set(), _s: new Set() });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
-    fLeads.forEach((r) => { B(canonNiche(r["Niche/Offer"])).leads++; });
-    fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
-    fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; if (classify(r["Status (GHL Pipeline)"]).show) o.shows++; });
+    fLeads.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); if (isC) { const e = emailOf(r); if (e) o._l.add(e); } else o.leads++; });
+    fApptsBooked.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); if (isC) { const e = emailOf(r); if (e) o._b.add(e); } else o.newCalls++; });
+    fApptsCall.forEach((r) => {
+      const o = B(canonNiche(r["Niche/Offer"]));
+      const show = classify(r["Status (GHL Pipeline)"]).show;
+      if (isC) { const e = emailOf(r); if (e) { o._v.add(e); if (show) o._s.add(e); } }
+      else { o.liveCalls++; if (show) o.shows++; }
+    });
     fCash.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]); });
+    if (isC) Object.values(bmap).forEach((o) => { o.leads = o._l.size; o.newCalls = o._b.size; o.liveCalls = o._v.size; o.shows = o._s.size; });
     const breakdown = Object.values(bmap)
       .filter((o) => o.niche && o.niche !== "Unmapped")
       .map((o) => ({
@@ -354,7 +385,7 @@ export default function GrowthCommand() {
     })).sort((a, b) => b.cash - a.cash);
 
     return { agg, trend, breakdown, channels, ads, closers };
-  }, [src, niche, offer, closer, from, to]);
+  }, [src, niche, offer, closer, from, to, view]);
 
   /* ---- render states ---- */
   if (loading) return <Shell theme={theme}><div className="state">Loading your live data…</div></Shell>;
@@ -431,6 +462,13 @@ export default function GrowthCommand() {
               <button className="dr-chip" onClick={() => { setFrom(""); setTo(todayStr()); }}>All</button>
             </div>
           </div>
+          <div className="dd">
+            <span className="dd-label">View</span>
+            <div className="seg">
+              <button className={"seg-btn" + (view === "calls" ? " active" : "")} onClick={() => setView("calls")}>Calls</button>
+              <button className={"seg-btn" + (view === "contacts" ? " active" : "")} onClick={() => setView("contacts")}>Contacts</button>
+            </div>
+          </div>
           <button className="theme-btn" onClick={() => setTheme(dark ? "light" : "dark")} title="Toggle theme">
             {dark ? <Sun size={15} /> : <Moon size={15} />}
           </button>
@@ -474,21 +512,27 @@ export default function GrowthCommand() {
         </div>
 
         <div className="panel">
-          <div className="panel-head"><h3>Marketing → Sales</h3></div>
+          <div className="panel-head"><h3>Marketing → Sales</h3><span className="hint">{view === "contacts" ? "unique contacts" : "per call"}</span></div>
           <div className="split">
             <div className="split-sec">
               <div className="split-head mkt">MARKETING</div>
               <StatRow label="Ad spend" value={usd(a.spend)} {...goalInfo(a.spend, gVol("spend"), false, usd)} />
-              <StatRow label="Leads" value={a.leadsCount} {...goalInfo(a.leadsCount, gVol("leads"), false, gInt)} />
-              <StatRow label="New calls scheduled" value={a.newCalls} strong {...goalInfo(a.newCalls, gVol("new_calls"), false, gInt)} />
-              <StatRow label="Cost / new call" value={a.costPerNewCall === Infinity ? "—" : usd(a.costPerNewCall)} {...goalInfo(a.costPerNewCall, gRate("cost_per_new_call"), true, usd)} />
+              <StatRow label={view === "contacts" ? "Unique leads" : "Leads"} value={a.leadsCount} {...(view === "calls" ? goalInfo(a.leadsCount, gVol("leads"), false, gInt) : {})} />
+              <StatRow label={view === "contacts" ? "Unique contacts booked" : "New calls scheduled"} value={a.newCalls} strong {...(view === "calls" ? goalInfo(a.newCalls, gVol("new_calls"), false, gInt) : {})} />
+              <StatRow label={view === "contacts" ? "Cost / contact" : "Cost / new call"} value={a.costPerNewCall === Infinity ? "—" : usd(a.costPerNewCall)} {...(view === "calls" ? goalInfo(a.costPerNewCall, gRate("cost_per_new_call"), true, usd) : {})} />
             </div>
             <div className="split-sec">
               <div className="split-head sal">SALES · calls on calendar</div>
-              <StatRow label="Live calls on calendar" value={a.liveCalls} strong />
-              <StatRow label="Shows" value={a.shows} pct={a.showRate} tone="teal" {...goalInfo(a.shows, gVol("shows"), false, gInt)} />
-              <StatRow label="No-shows" value={a.noshows} />
-              <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong {...goalInfo(a.closes, gVol("closes"), false, gInt)} />
+              <StatRow label={view === "contacts" ? "Unique contacts on calendar" : "Live calls on calendar"} value={a.liveCalls} strong />
+              <StatRow label={view === "contacts" ? "Contacts who showed" : "Shows"} value={a.shows} pct={a.showRate} tone="teal" {...(view === "calls" ? goalInfo(a.shows, gVol("shows"), false, gInt) : {})} />
+              <StatRow label={view === "contacts" ? "Contacts who never showed" : "No-shows"} value={a.noshows} />
+              {view === "contacts" && a.callsPerContact != null && (
+                <StatRow label="Calls per contact" value={a.callsPerContact.toFixed(1)} />
+              )}
+              {view === "contacts" && a.closes > 0 && (
+                <StatRow label="Calls per close" value={(a.totalCallRows / a.closes).toFixed(1)} />
+              )}
+              <StatRow label="Closes" value={a.closes} pct={a.closeRate} tone="gold" strong {...(view === "calls" ? goalInfo(a.closes, gVol("closes"), false, gInt) : {})} />
               <StatRow label="Cash collected" value={usd(a.cash)} tone="gold" {...goalInfo(a.cash, gVol("cash"), false, usd)} />
               <StatRow label="Expected cash (deals)" value={usd(a.dealSize)} tone="gold" />
             </div>
@@ -499,7 +543,7 @@ export default function GrowthCommand() {
       <section className="panel">
         <div className="panel-head">
           <h3>Niche breakdown</h3>
-          <span className="hint"><Target size={12} /> volumes · conversion % · CAC vs {usd(TARGET.cac)}</span>
+          <span className="hint"><Target size={12} /> {view === "contacts" ? "unique contacts" : "per call"} · CAC vs {usd(TARGET.cac)}</span>
         </div>
         <div className="tbl-scroll">
         <table className="tbl">
@@ -663,6 +707,9 @@ const CSS = `
 }
 .gc-root.light .panel,.gc-root.light .kpi{box-shadow:var(--shadow);}
 .gc-root.light .dr-input{color-scheme:light;}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+.seg-btn{background:var(--panel);border:none;color:var(--dim);padding:7px 12px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;}
+.seg-btn.active{background:var(--gold-soft);color:var(--gold);font-weight:600;}
 .theme-btn{align-self:flex-end;background:var(--panel);border:1px solid var(--line);color:var(--dim);width:34px;height:34px;border-radius:8px;display:grid;place-items:center;cursor:pointer;}
 .theme-btn:hover{border-color:#8894a8;color:var(--text);}
 .tbl-scroll{overflow-x:auto;}
