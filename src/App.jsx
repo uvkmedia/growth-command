@@ -31,6 +31,15 @@ function canonNiche(s) {
   const t = s.trim();
   return t || "Unmapped";
 }
+function canonChannel(v) {
+  const t = String(v || "").toLowerCase();
+  if (!t.trim()) return "";
+  if (t.includes("meta") || t.includes("facebook") || t.includes("instagram") || t.includes("fb ")) return "Meta";
+  if (t.includes("referral")) return "Referral";
+  if (t.includes("email")) return "Email";
+  if (t.includes("organic")) return "Organic";
+  return "Other";
+}
 function num(v) {
   if (typeof v === "number") return v;
   const n = parseFloat(String(v).replace(/[$,]/g, ""));
@@ -203,12 +212,12 @@ export default function GrowthCommand() {
     if (!src) return { niches: ["All"], offers: ["All"], closers: ["All"] };
     const niches = new Set(), offers = new Set(), closers = new Set();
     src.meta.forEach((r) => { niches.add(canonNiche(r.niche)); if (r.offer) offers.add(r.offer); });
-    src.appts.forEach((r) => { if (r["Closer"]) closers.add(r["Closer"]); });
+    src.appts.forEach((r) => { if (r["Closer/Setter"]) closers.add(r["Closer/Setter"]); });
     src.cash.forEach((r) => { if (r["Owner"]) closers.add(r["Owner"]); });
     return {
       niches: ["All", ...[...niches].filter(Boolean).sort()],
       offers: ["All", ...[...offers].filter(Boolean).sort()],
-      closers: ["All", ...[...closers].filter(Boolean).sort()],
+      closers: ["All", ...[...closers].filter((c) => c && !["Closer", "Setter", "TBD"].includes(c)).sort()],
     };
   }, [src]);
 
@@ -229,17 +238,17 @@ export default function GrowthCommand() {
     //   LIVE calls on calendar = call date (col E)          -> SALES (shows/closes)
     const fApptsBooked = src.appts.filter((r) =>
       nMatch(r["Niche/Offer"]) &&
-      (closer === "All" || r["Closer"] === closer) &&
+      (closer === "All" || r["Closer/Setter"] === closer) &&
       inWin(r["Date"]));
     const fApptsCall = src.appts.filter((r) =>
       nMatch(r["Niche/Offer"]) &&
-      (closer === "All" || r["Closer"] === closer) &&
+      (closer === "All" || r["Closer/Setter"] === closer) &&
       inWin(r["Appointment Time/Date"]));
 
     // LEADS
     const fLeads = src.leads.filter((r) =>
       nMatch(r["Niche/Offer"]) &&
-      (closer === "All" || r["Closer/Owner"] === closer) &&
+      (closer === "All" || r["Closer/Setter"] === closer) &&
       inWin(r["Date"]));
 
     // CASH & CLOSES — this sheet is the source of truth for paying deals.
@@ -302,6 +311,20 @@ export default function GrowthCommand() {
         cac: o.closes ? o.spend / o.closes : Infinity,
       })).sort((a, b) => b.spend - a.spend);
 
+    // channel breakdown — rows with a Channel value only (clean-forward data)
+    const chmap = {};
+    const CH = (n) => (chmap[n] ??= { channel: n, spend: 0, leads: 0, newCalls: 0, shows: 0, closes: 0, cash: 0 });
+    fLeads.forEach((r) => { const c = canonChannel(r["Channel"]); if (c) CH(c).leads++; });
+    fApptsBooked.forEach((r) => { const c = canonChannel(r["Channel"]); if (c) CH(c).newCalls++; });
+    fApptsCall.forEach((r) => { const c = canonChannel(r["Channel"]); if (c && classify(r["Status (GHL Pipeline)"]).show) CH(c).shows++; });
+    fCash.forEach((r) => { const c = canonChannel(r["Last Booking Source"]); if (c) { CH(c).closes++; CH(c).cash += num(r["Cash Up Front"]); } });
+    if (chmap["Meta"]) chmap["Meta"].spend = Math.round(spend);  // ad spend is Meta's
+    const channels = Object.values(chmap).map((o) => ({
+      ...o,
+      showRate: o.newCalls ? o.shows / o.newCalls : NaN,
+      closeRate: o.shows ? o.closes / o.shows : NaN,
+    })).sort((a, b) => b.cash - a.cash || b.newCalls - a.newCalls);
+
     // top ads (meta only — real ad-level spend + Meta schedules; CAC needs attribution, later)
     const amap = {};
     fMeta.forEach((r) => {
@@ -316,7 +339,7 @@ export default function GrowthCommand() {
     const cmap = {};
     const CL = (k) => (cmap[k] ??= { closer: k, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0 });
     fApptsCall.forEach((r) => {
-      const o = CL(r["Closer"] || "(none)");
+      const o = CL(r["Closer/Setter"] || "(none)");
       o.liveCalls++;
       if (classify(r["Status (GHL Pipeline)"]).show) o.shows++;
     });
@@ -330,7 +353,7 @@ export default function GrowthCommand() {
       closeRate: o.shows ? o.closes / o.shows : NaN,
     })).sort((a, b) => b.cash - a.cash);
 
-    return { agg, trend, breakdown, ads, closers };
+    return { agg, trend, breakdown, channels, ads, closers };
   }, [src, niche, offer, closer, from, to]);
 
   /* ---- render states ---- */
@@ -509,6 +532,43 @@ export default function GrowthCommand() {
                 <td className={"r mono " + (b.cac === Infinity ? "faint" : b.cac > TARGET.cac ? "coral" : "teal")}>{b.cac === Infinity ? "—" : usd(b.cac)}</td>
                 <td className="r mono gold-txt">{usd(b.cash)}</td>
                 <td className="r mono dim">{usd(b.dealSize)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Channel breakdown</h3>
+          <span className="hint">Meta · Email · Referral · Organic — tagged rows only</span>
+        </div>
+        <div className="tbl-scroll">
+        <table className="tbl">
+          <thead><tr>
+            <th>Channel</th>
+            <th className="r">Spend</th>
+            <th className="r">Leads</th>
+            <th className="r">Booked</th>
+            <th className="r">Shows</th>
+            <th className="r">Show %</th>
+            <th className="r">Closes</th>
+            <th className="r">Close %</th>
+            <th className="r">Cash</th>
+          </tr></thead>
+          <tbody>
+            {model.channels.map((c) => (
+              <tr key={c.channel}>
+                <td className="strong">{c.channel}</td>
+                <td className="r mono">{c.spend ? usd(c.spend) : "—"}</td>
+                <td className="r mono">{c.leads || "—"}</td>
+                <td className="r mono">{c.newCalls || "—"}</td>
+                <td className="r mono">{c.shows || "—"}</td>
+                <td className="r mono dim">{pctf(c.showRate)}</td>
+                <td className="r mono strong">{c.closes || "—"}</td>
+                <td className="r mono dim">{pctf(c.closeRate)}</td>
+                <td className="r mono gold-txt">{usd(c.cash)}</td>
               </tr>
             ))}
           </tbody>
