@@ -213,7 +213,7 @@ export default function GrowthCommand() {
     const niches = new Set(), offers = new Set(), closers = new Set();
     src.meta.forEach((r) => { niches.add(canonNiche(r.niche)); if (r.offer) offers.add(r.offer); });
     src.appts.forEach((r) => { if (r["Closer/Setter"]) closers.add(r["Closer/Setter"]); });
-    src.cash.forEach((r) => { if (r["Owner"]) closers.add(r["Owner"]); });
+    src.cash.forEach((r) => { if (r["Closer"]) closers.add(r["Closer"]); });
     return {
       niches: ["All", ...[...niches].filter(Boolean).sort()],
       offers: ["All", ...[...offers].filter(Boolean).sort()],
@@ -254,8 +254,8 @@ export default function GrowthCommand() {
     // CASH & CLOSES — this sheet is the source of truth for paying deals.
     // Niche column ties each close to a niche; each row = one close.
     const fCash = src.cash.filter((r) =>
-      nMatch(r["Niche"]) &&
-      (closer === "All" || r["Owner"] === closer) &&
+      nMatch(r["Niche/Offer"]) &&
+      (closer === "All" || r["Closer"] === closer) &&
       inWin(r["Date Created"]));
 
     // aggregates
@@ -298,7 +298,7 @@ export default function GrowthCommand() {
     fLeads.forEach((r) => { B(canonNiche(r["Niche/Offer"])).leads++; });
     fApptsBooked.forEach((r) => { B(canonNiche(r["Niche/Offer"])).newCalls++; });
     fApptsCall.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.liveCalls++; if (classify(r["Status (GHL Pipeline)"]).show) o.shows++; });
-    fCash.forEach((r) => { const o = B(canonNiche(r["Niche"])); o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]); });
+    fCash.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]); });
     const breakdown = Object.values(bmap)
       .filter((o) => o.niche && o.niche !== "Unmapped")
       .map((o) => ({
@@ -344,7 +344,7 @@ export default function GrowthCommand() {
       if (classify(r["Status (GHL Pipeline)"]).show) o.shows++;
     });
     fCash.forEach((r) => {
-      const o = CL(r["Owner"] || "(none)");
+      const o = CL(r["Closer"] || "(none)");
       o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]);
     });
     const closers = Object.values(cmap).map((o) => ({
