@@ -66,10 +66,13 @@ function dayKey(v) {
 // classify a GHL pipeline status string into funnel stages
 function classify(status) {
   const s = String(status || "").toLowerCase();
+  if (s.includes("invalid")) return { noshow: false, show: false, close: false };  // never reached a call
   const noShow = /no[\s-]?show/.test(s);
   const closed = (/close/.test(s) && !/no close/.test(s)) || /\bwon\b/.test(s);
-  const showed = closed || (!noShow && /show|open|demo|proposal/.test(s));
-  return { noshow: noShow && !showed, show: showed, close: closed };
+  // "poor fit" / "bad fit" / "lost" = we talked to them -> counts as a show
+  const showed = closed || (!noShow && /show|open|demo|proposal|poor fit|bad fit|lost/.test(s));
+  const poorfit = /poor fit|bad fit/.test(s);
+  return { noshow: noShow && !showed, show: showed, close: closed, poorfit };
 }
 
 /* ---- format helpers ---------------------------------------------- */
@@ -266,28 +269,29 @@ export default function GrowthCommand() {
     const isC = view === "contacts";
     const emailOf = (r) => String(r["Email"] || "").trim().toLowerCase();
 
-    let newCalls, liveCalls, shows, noshows, callsPerContact = null;
+    let newCalls, liveCalls, shows, noshows, callsPerContact = null, poorFits = 0;
     const totalCallRows = fApptsCall.length;
     if (!isC) {
       newCalls = fApptsBooked.length;
       liveCalls = totalCallRows; shows = 0; noshows = 0;
       fApptsCall.forEach((r) => {
         const c = classify(r["Status (GHL Pipeline)"]);
-        if (c.show) shows++; if (c.noshow) noshows++;
+        if (c.show) shows++; if (c.noshow) noshows++; if (c.poorfit) poorFits++;
       });
     } else {
-      const bSet = new Set(), vSet = new Set(), sSet = new Set(), nsSet = new Set();
+      const bSet = new Set(), vSet = new Set(), sSet = new Set(), nsSet = new Set(), pfSet = new Set();
       fApptsBooked.forEach((r) => { const e = emailOf(r); if (e) bSet.add(e); });
       fApptsCall.forEach((r) => {
         const e = emailOf(r); if (!e) return;
         vSet.add(e);
         const c = classify(r["Status (GHL Pipeline)"]);
-        if (c.show) sSet.add(e); if (c.noshow) nsSet.add(e);
+        if (c.show) sSet.add(e); if (c.noshow) nsSet.add(e); if (c.poorfit) pfSet.add(e);
       });
       newCalls = bSet.size;
       liveCalls = vSet.size;
       shows = sSet.size;
       noshows = [...nsSet].filter((e) => !sSet.has(e)).length;  // never showed
+      poorFits = pfSet.size;
       callsPerContact = vSet.size ? totalCallRows / vSet.size : null;
     }
 
@@ -298,7 +302,7 @@ export default function GrowthCommand() {
     let cash = 0, dealSize = 0;
     fCash.forEach((r) => { cash += num(r["Cash Up Front"]); dealSize += num(r["Total Deal Size"]); });
 
-    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash, dealSize, callsPerContact, totalCallRows };
+    const agg = { spend, impressions, newCalls, liveCalls, shows, noshows, closes, leadsCount, cash, dealSize, callsPerContact, totalCallRows, poorFits };
     agg.costPerNewCall = newCalls ? spend / newCalls : Infinity;
     agg.showRate = liveCalls ? shows / liveCalls : NaN;
     agg.closeRate = shows ? closes / shows : NaN;
@@ -317,19 +321,19 @@ export default function GrowthCommand() {
 
     // breakdown by NICHE — full funnel: spend, leads, booked, shows, closes, cash
     const bmap = {};
-    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, closes: 0, cash: 0, dealSize: 0,
-      _l: new Set(), _b: new Set(), _v: new Set(), _s: new Set() });
+    const B = (n) => (bmap[n] ??= { niche: n, spend: 0, leads: 0, newCalls: 0, liveCalls: 0, shows: 0, poorFits: 0, closes: 0, cash: 0, dealSize: 0,
+      _l: new Set(), _b: new Set(), _v: new Set(), _s: new Set(), _p: new Set() });
     fMeta.forEach((r) => { B(canonNiche(r.niche)).spend += num(r.spend); });
     fLeads.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); if (isC) { const e = emailOf(r); if (e) o._l.add(e); } else o.leads++; });
     fApptsBooked.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); if (isC) { const e = emailOf(r); if (e) o._b.add(e); } else o.newCalls++; });
     fApptsCall.forEach((r) => {
       const o = B(canonNiche(r["Niche/Offer"]));
-      const show = classify(r["Status (GHL Pipeline)"]).show;
-      if (isC) { const e = emailOf(r); if (e) { o._v.add(e); if (show) o._s.add(e); } }
-      else { o.liveCalls++; if (show) o.shows++; }
+      const c = classify(r["Status (GHL Pipeline)"]);
+      if (isC) { const e = emailOf(r); if (e) { o._v.add(e); if (c.show) o._s.add(e); if (c.poorfit) o._p.add(e); } }
+      else { o.liveCalls++; if (c.show) o.shows++; if (c.poorfit) o.poorFits++; }
     });
     fCash.forEach((r) => { const o = B(canonNiche(r["Niche/Offer"])); o.closes++; o.cash += num(r["Cash Up Front"]); o.dealSize += num(r["Total Deal Size"]); });
-    if (isC) Object.values(bmap).forEach((o) => { o.leads = o._l.size; o.newCalls = o._b.size; o.liveCalls = o._v.size; o.shows = o._s.size; });
+    if (isC) Object.values(bmap).forEach((o) => { o.leads = o._l.size; o.newCalls = o._b.size; o.liveCalls = o._v.size; o.shows = o._s.size; o.poorFits = o._p.size; });
     const breakdown = Object.values(bmap)
       .filter((o) => o.niche && o.niche !== "Unmapped")
       .map((o) => ({
@@ -339,6 +343,7 @@ export default function GrowthCommand() {
         bookRate: o.leads ? o.newCalls / o.leads : NaN,
         showRate: o.newCalls ? o.shows / o.newCalls : NaN,
         closeRate: o.shows ? o.closes / o.shows : NaN,
+        poorFitRate: o.shows ? o.poorFits / o.shows : NaN,
         cac: o.closes ? o.spend / o.closes : Infinity,
       })).sort((a, b) => b.spend - a.spend);
 
@@ -526,6 +531,7 @@ export default function GrowthCommand() {
               <StatRow label={view === "contacts" ? "Unique contacts on calendar" : "Live calls on calendar"} value={a.liveCalls} strong />
               <StatRow label={view === "contacts" ? "Contacts who showed" : "Shows"} value={a.shows} pct={a.showRate} tone="teal" {...(view === "calls" ? goalInfo(a.shows, gVol("shows"), false, gInt) : {})} />
               <StatRow label={view === "contacts" ? "Contacts who never showed" : "No-shows"} value={a.noshows} />
+              <StatRow label="Poor fits" value={a.poorFits} pct={a.shows ? a.poorFits / a.shows : NaN} tone="coral" />
               {view === "contacts" && a.callsPerContact != null && (
                 <StatRow label="Calls per contact" value={a.callsPerContact.toFixed(1)} />
               )}
@@ -555,6 +561,8 @@ export default function GrowthCommand() {
             <th className="r">Book %</th>
             <th className="r">Shows</th>
             <th className="r">Show %</th>
+            <th className="r">Poor Fit</th>
+            <th className="r">PF %</th>
             <th className="r">Closes</th>
             <th className="r">Close %</th>
             <th className="r">CAC</th>
@@ -571,6 +579,8 @@ export default function GrowthCommand() {
                 <td className="r mono dim">{pctf(b.bookRate)}</td>
                 <td className="r mono">{b.shows || "—"}</td>
                 <td className="r mono dim">{pctf(b.showRate)}</td>
+                <td className="r mono coral">{b.poorFits || "—"}</td>
+                <td className="r mono dim">{pctf(b.poorFitRate)}</td>
                 <td className="r mono strong">{b.closes || "—"}</td>
                 <td className="r mono dim">{pctf(b.closeRate)}</td>
                 <td className={"r mono " + (b.cac === Infinity ? "faint" : b.cac > TARGET.cac ? "coral" : "teal")}>{b.cac === Infinity ? "—" : usd(b.cac)}</td>
